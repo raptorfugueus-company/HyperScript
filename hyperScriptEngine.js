@@ -68,7 +68,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             await parseBlock(tempContainer, currentMutableScope);
             child.replaceWith(...Array.from(tempContainer.childNodes));
         } else if (tag === "hs-for") {
-            // ... (code hs-for existant, simplifié pour brièveté si inchangé, mais gardons la logique complète)
             const loop = child.getAttribute("loop");
             const template = child.innerHTML;
             let loopVarName = child.getAttribute("var");
@@ -126,7 +125,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             if (varName) delete currentMutableScope[varName];
             child.replaceWith(...Array.from(repeatTempContainer.childNodes));
         } else if (tag === "hs-while") {
-             // ... (idem hs-while)
              const condition = child.getAttribute("condition");
              const template = child.innerHTML;
              let whileOutput = "";
@@ -143,7 +141,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
              whileTempContainer.innerHTML = whileOutput;
              child.replaceWith(...Array.from(whileTempContainer.childNodes));
         } else if (tag === "hs-switch") {
-            // ... (idem hs-switch)
             const expr = child.getAttribute("expr");
             const switchVal = evaluateExpr(expr, currentMutableScope);
             let matchedHTML = "";
@@ -169,7 +166,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
         } else if (tag === "hs-print") {
             const expr = child.getAttribute("value");
             const val = evaluateExpr(expr, currentMutableScope);
-            // FIX: Gestion correcte de la valeur 0 et affichage par défaut si undefined
             child.outerHTML = (val !== undefined && val !== null) ? val : "";
         } else if (tag === "hs-log") {
             const expr = child.getAttribute("value");
@@ -188,7 +184,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             child.removeAttribute("condition");
             await parseBlock(child, currentMutableScope);
         } else if (tag === "hs-addclass" || tag === "hs-removeclass" || tag === "hs-attr") {
-             // ... (blocs DOM simples, inchangés)
              const isAdd = tag === "hs-addclass";
              const isRemove = tag === "hs-removeclass";
              const targetSelector = child.getAttribute("target");
@@ -244,4 +239,5 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
 document.addEventListener("DOMContentLoaded", async () => {
     await parseBlock(document.body, HS.vars);
 });
+
 
