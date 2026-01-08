@@ -205,18 +205,34 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
                  }
              }
              child.remove();
+
         } else if (tag === "hs-on") {
             const event = child.getAttribute("event");
             const targetSelector = child.getAttribute("target");
             const actions = child.innerHTML;
-            const targetEl = element.querySelector(targetSelector) || document.querySelector(targetSelector);
-            if (targetEl) {
-                targetEl.addEventListener(event, async () => {
+            
+            const triggerEl = element.querySelector(targetSelector) || document.querySelector(targetSelector);
+            
+            if (triggerEl) {
+                triggerEl.addEventListener(event, async (e) => {
+
                     const tempContainer = document.createElement("div");
                     tempContainer.innerHTML = actions;
-                    // FIX: Utilisation de currentMutableScope (fermeture) au lieu de HS.vars global
+                    
                     await parseBlock(tempContainer, currentMutableScope);
-                    targetEl.append(...Array.from(tempContainer.childNodes));
+
+                    const outputTarget = tempContainer.querySelector('[target]');
+                    
+                    if (outputTarget) {
+                        const destinationSelector = outputTarget.getAttribute('target');
+                        const destinationEl = document.querySelector(destinationSelector);
+                        
+                        if (destinationEl) {
+                            destinationEl.innerHTML = ""; 
+                            destinationEl.append(...Array.from(outputTarget.childNodes));
+                        }
+                    } else {
+                    }
                 });
             }
             child.remove();
