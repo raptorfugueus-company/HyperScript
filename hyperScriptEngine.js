@@ -5,14 +5,13 @@ const HS = {
 function evaluateExpr(expr, localScope) {
     try {
         const combinedScope = { ...HS.vars, ...localScope };
-        // Utilisation d'un Proxy pour éviter les ReferenceError sur les variables non initialisées (optionnel mais utile pour le cas x+1)
         const safeScope = new Proxy(combinedScope, {
             has: (target, prop) => true,
             get: (target, prop) => {
                 if (prop === Symbol.unscopables) return undefined;
                 if (prop in target) return target[prop];
                 if (prop in window || prop === 'Math' || prop === 'console') return window[prop];
-                return 0; // Valeur par défaut pour les variables inconnues
+                return 0;
             }
         });
         return Function("vars", `with(vars){ return (${expr}); }`)(safeScope);
@@ -245,3 +244,4 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
 document.addEventListener("DOMContentLoaded", async () => {
     await parseBlock(document.body, HS.vars);
 });
+
