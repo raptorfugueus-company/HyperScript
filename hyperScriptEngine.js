@@ -1,10 +1,44 @@
+const HS_DATA = {};
+function updateObservables() {
+    document.querySelectorAll("hs-print").forEach(el => {
+        const expr = el.getAttribute("value");
+        if (expr) {
+            const val = evaluateExpr(expr, HS.vars);
+            el.textContent = (val !== undefined && val !== null) ? val : "";
+        }
+    });
+
+    document.querySelectorAll("hs-show[condition]").forEach(el => {
+        const cond = el.getAttribute("condition");
+        const visible = evaluateExpr(cond, HS.vars);
+        el.style.display = visible ? "" : "none";
+    });
+    
+    document.querySelectorAll("hs-hide[condition]").forEach(el => {
+        const cond = el.getAttribute("condition");
+        const hidden = evaluateExpr(cond, HS.vars);
+        el.style.display = hidden ? "none" : "";
+    });
+}
+
 const HS = {
-    vars: {}
+    vars: new Proxy(HS_DATA, {
+        set: (target, prop, value) => {
+            target[prop] = value;
+            updateObservables();
+            return true;
+        },
+        get: (target, prop) => {
+            return target[prop];
+        }
+    })
 };
 
 function evaluateExpr(expr, localScope) {
     try {
-        const combinedScope = { ...HS.vars, ...localScope };
+        const rawScope = localScope === HS.vars ? HS_DATA : localScope;
+        const combinedScope = { ...HS_DATA, ...rawScope };
+
         const safeScope = new Proxy(combinedScope, {
             has: (target, prop) => true,
             get: (target, prop) => {
@@ -16,7 +50,6 @@ function evaluateExpr(expr, localScope) {
         });
         return Function("vars", `with(vars){ return (${expr}); }`)(safeScope);
     } catch (e) {
-        console.warn("[HyperScript] Erreur lors de l'évaluation de l'expression:", expr, e);
         return undefined;
     }
 }
@@ -25,7 +58,7 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
     const children = Array.from(element.children);
 
     for (const child of children) {
-        if (!child.parentNode) continue;
+        if (!document.contains(child) && child.parentNode !== element) continue;
 
         const tag = child.tagName.toLowerCase();
 
@@ -34,26 +67,41 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             const value = child.getAttribute("value");
             currentMutableScope[name] = isNaN(value) ? value : Number(value);
             child.remove();
+
         } else if (tag === "hs-set") {
             const name = child.getAttribute("name");
             const expr = child.getAttribute("value");
             currentMutableScope[name] = evaluateExpr(expr, currentMutableScope);
             child.remove();
+
         } else if (tag === "hs-math") {
             const target = child.getAttribute("result");
             const expr = child.getAttribute("expr");
             currentMutableScope[target] = evaluateExpr(expr, currentMutableScope);
             child.remove();
+
         } else if (tag === "hs-random") {
             const name = child.getAttribute("name");
             const min = Number(child.getAttribute("min"));
             const max = Number(child.getAttribute("max"));
             currentMutableScope[name] = Math.floor(Math.random() * (max - min + 1)) + min;
             child.remove();
+
+        } else if (tag === "hs-print") {
+            const expr = child.getAttribute("value");
+            const val = evaluateExpr(expr, currentMutableScope);
+            child.textContent = (val !== undefined && val !== null) ? val : "";
+
+        } else if (tag === "hs-log") {
+            const expr = child.getAttribute("value");
+            console.log("[HS-LOG]", evaluateExpr(expr, currentMutableScope));
+            child.remove();
+
         } else if (tag === "hs-group") {
             const groupLocalScope = {};
             await parseBlock(child, groupLocalScope);
             child.replaceWith(...Array.from(child.childNodes));
+
         } else if (tag === "hs-if") {
             const condition = child.getAttribute("condition");
             const elsePart = child.querySelector("hs-else");
@@ -67,6 +115,19 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             tempContainer.innerHTML = contentToProcess;
             await parseBlock(tempContainer, currentMutableScope);
             child.replaceWith(...Array.from(tempContainer.childNodes));
+
+        } else if (tag === "hs-show") {
+            const cond = child.getAttribute("condition");
+            const visible = evaluateExpr(cond, currentMutableScope);
+            if (!visible) child.style.display = "none";
+            await parseBlock(child, currentMutableScope);
+
+        } else if (tag === "hs-hide") {
+            const cond = child.getAttribute("condition");
+            const hide = evaluateExpr(cond, currentMutableScope);
+            if (hide) child.style.display = "none";
+            await parseBlock(child, currentMutableScope);
+
         } else if (tag === "hs-for") {
             const loop = child.getAttribute("loop");
             const template = child.innerHTML;
@@ -81,15 +142,16 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             try {
                 const loopCollector = Function(`
                     const results = [];
-                    let i, j, k, index;
+                    let i, j, k, index, item;
                     let __safety = 0;
                     for(${loop}){
                         if(++__safety > 2000) break;
                         let val = undefined;
-                        if(typeof i !== 'undefined') val = i;
-                        else if(typeof j !== 'undefined') val = j;
+                        // On essaie de deviner la variable de boucle
+                        if(typeof item !== 'undefined') val = item;
+                        else if(typeof i !== 'undefined') val = i;
                         else if(typeof index !== 'undefined') val = index;
-                        else if(typeof k !== 'undefined') val = k;
+                        
                         results.push(val);
                     }
                     return results;
@@ -110,82 +172,34 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
             if (loopVarName) delete currentMutableScope[loopVarName];
             child.replaceWith(...Array.from(loopTempContainer.childNodes));
 
-        } else if (tag === "hs-repeat") {
-            let times = child.getAttribute("times");
-            const varName = child.getAttribute("var");
-            times = evaluateExpr(times, currentMutableScope) || 0;
-            const repeatTempContainer = document.createElement("div");
-            for (let i = 1; i <= times; i++) {
-                if (varName) currentMutableScope[varName] = i;
-                const iterWrapper = document.createElement("div");
-                iterWrapper.innerHTML = child.innerHTML;
-                await parseBlock(iterWrapper, currentMutableScope);
-                repeatTempContainer.append(...Array.from(iterWrapper.childNodes));
-            }
-            if (varName) delete currentMutableScope[varName];
-            child.replaceWith(...Array.from(repeatTempContainer.childNodes));
-        } else if (tag === "hs-while") {
-             const condition = child.getAttribute("condition");
-             const template = child.innerHTML;
-             let whileOutput = "";
-             let safety = 0;
-             while (safety++ < 1000) {
-                 let condResult = evaluateExpr(condition, currentMutableScope);
-                 if (!condResult) break;
-                 const iterationTempDiv = document.createElement("div");
-                 iterationTempDiv.innerHTML = template;
-                 await parseBlock(iterationTempDiv, currentMutableScope);
-                 whileOutput += iterationTempDiv.innerHTML;
-             }
-             const whileTempContainer = document.createElement("div");
-             whileTempContainer.innerHTML = whileOutput;
-             child.replaceWith(...Array.from(whileTempContainer.childNodes));
-        } else if (tag === "hs-switch") {
-            const expr = child.getAttribute("expr");
-            const switchVal = evaluateExpr(expr, currentMutableScope);
-            let matchedHTML = "";
-            const cases = Array.from(child.querySelectorAll("hs-case"));
-            let defaultCaseHtml = "";
-            for (const caseEl of cases) {
-                if (caseEl.hasAttribute("default")) {
-                    defaultCaseHtml = caseEl.innerHTML;
-                } else {
-                    const caseValExpr = caseEl.getAttribute("value");
-                    const isMatch = evaluateExpr(`(${caseValExpr}) === val`, { ...currentMutableScope, val: switchVal });
-                    if (isMatch) {
-                        matchedHTML = caseEl.innerHTML;
-                        break;
+        } else if (tag === "hs-on") {
+            const event = child.getAttribute("event");
+            const targetSelector = child.getAttribute("target");
+            const actions = child.innerHTML;
+            const triggerEl = document.querySelector(targetSelector) || element.querySelector(targetSelector);
+            
+            if (triggerEl) {
+                triggerEl.addEventListener(event, async (e) => {
+                    const tempContainer = document.createElement("div");
+                    tempContainer.innerHTML = actions;
+                    
+                    await parseBlock(tempContainer, HS.vars);
+
+                    const outputTarget = tempContainer.querySelector('[target]');
+                    if (outputTarget) {
+                        const destinationSelector = outputTarget.getAttribute('target');
+                        const destinationEl = document.querySelector(destinationSelector);
+                        if (destinationEl) {
+                            destinationEl.innerHTML = ""; 
+                            destinationEl.append(...Array.from(outputTarget.childNodes));
+                        }
                     }
-                }
+                });
             }
-            if (!matchedHTML) matchedHTML = defaultCaseHtml;
-            const switchTempContainer = document.createElement("div");
-            switchTempContainer.innerHTML = matchedHTML;
-            await parseBlock(switchTempContainer, currentMutableScope);
-            child.replaceWith(...Array.from(switchTempContainer.childNodes));
-        } else if (tag === "hs-print") {
-            const expr = child.getAttribute("value");
-            const val = evaluateExpr(expr, currentMutableScope);
-            child.outerHTML = (val !== undefined && val !== null) ? val : "";
-        } else if (tag === "hs-log") {
-            const expr = child.getAttribute("value");
-            console.log("[HS-LOG]", evaluateExpr(expr, currentMutableScope));
             child.remove();
-        } else if (tag === "hs-show") {
-            const cond = child.getAttribute("condition");
-            const visible = evaluateExpr(cond, currentMutableScope);
-            if (!visible) child.style.display = "none";
-            child.removeAttribute("condition");
-            await parseBlock(child, currentMutableScope);
-        } else if (tag === "hs-hide") {
-            const cond = child.getAttribute("condition");
-            const hide = evaluateExpr(cond, currentMutableScope);
-            if (hide) child.style.display = "none";
-            child.removeAttribute("condition");
-            await parseBlock(child, currentMutableScope);
+            
         } else if (tag === "hs-addclass" || tag === "hs-removeclass" || tag === "hs-attr") {
              const isAdd = tag === "hs-addclass";
-             const isRemove = tag === "hs-removeclass";
              const targetSelector = child.getAttribute("target");
              const targetEl = document.querySelector(targetSelector);
              if (targetEl) {
@@ -200,36 +214,6 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
              }
              child.remove();
 
-        } else if (tag === "hs-on") {
-            const event = child.getAttribute("event");
-            const targetSelector = child.getAttribute("target");
-            const actions = child.innerHTML;
-            
-            const triggerEl = element.querySelector(targetSelector) || document.querySelector(targetSelector);
-            
-            if (triggerEl) {
-                triggerEl.addEventListener(event, async (e) => {
-
-                    const tempContainer = document.createElement("div");
-                    tempContainer.innerHTML = actions;
-                    
-                    await parseBlock(tempContainer, currentMutableScope);
-
-                    const outputTarget = tempContainer.querySelector('[target]');
-                    
-                    if (outputTarget) {
-                        const destinationSelector = outputTarget.getAttribute('target');
-                        const destinationEl = document.querySelector(destinationSelector);
-                        
-                        if (destinationEl) {
-                            destinationEl.innerHTML = ""; 
-                            destinationEl.append(...Array.from(outputTarget.childNodes));
-                        }
-                    } else {
-                    }
-                });
-            }
-            child.remove();
         } else {
             await parseBlock(child, currentMutableScope);
         }
@@ -237,7 +221,11 @@ async function parseBlock(element, currentMutableScope = HS.vars) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+    const style = document.createElement('style');
+    style.innerHTML = `
+        hs-print { display: inline; }
+        hs-show, hs-hide { display: block; }
+    `;
+    document.head.appendChild(style);
     await parseBlock(document.body, HS.vars);
 });
-
-
